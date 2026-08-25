@@ -121,6 +121,10 @@ services:
     depends_on:
       vast-gateway:
         condition: service_healthy
+    labels:
+      # Watchtower: chỉ update container này, scope cliproxy
+      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.scope: cliproxy
     ports:
       - "127.0.0.1:1455:1455"
       - "8317:8317"
@@ -141,3 +145,24 @@ services:
       - /home/Docker/CLIProxyAPI/opencodex:/data/opencodex:rw
       # >>> VAST CLUSTER BENCH: mount tunnel → tự dò instances.txt + key SSH <<<
       - /home/Docker/vast-tunnel:/vast-tunnel:ro
+
+  # ============================================================
+  # 5) WATCHTOWER — tự update image cli-proxy-api (scope cliproxy)
+  #     Chỉ update container có label scope=cliproxy; KHÔNG đụng
+  #     gateway/tunnel/config-sync (build từ source).
+  # ============================================================
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    networks:
+      - vast-net
+    environment:
+      WATCHTOWER_POLL_INTERVAL: "${WATCHTOWER_POLL_INTERVAL:-21600}"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_SCOPE: "cliproxy"
+      WATCHTOWER_INCLUDE_STOPPED: "false"
+      WATCHTOWER_REVIVE_STOPPED: "false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
