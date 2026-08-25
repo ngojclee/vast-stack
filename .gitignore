@@ -1,0 +1,9 @@
+.env
+*.pem
+id_ed25519*
+known_hosts
+state/
+config/generated/
+*.bak
+__pycache__/
+*.pyc

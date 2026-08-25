@@ -1,0 +1,143 @@
+# ================================================================
+# vast-stack — production-ready Vast.ai + CPA stack
+#
+# Portainer deployment:
+#   1. Tạo repo/stack trong Portainer (Build from git, hoặc paste compose
+#      + đặt các thư mục gateway/ tunnel/ config-sync/ cạnh nhau)
+#   2. Set environment variables (xem .env.example)
+#   3. Deploy
+#
+# KHÔNG nhúng Python code vào compose — mỗi service build từ Dockerfile
+# riêng (gateway/, tunnel/, config-sync/). Cấu hình tập trung ở .env.
+# ================================================================
+
+name: vast-cpa
+
+networks:
+  vast-net:
+    driver: bridge
+
+services:
+  # ============================================================
+  # 1) DYNAMIC SSH TUNNEL MANAGER
+  # ============================================================
+  vast-tunnel:
+    build: ./tunnel
+    container_name: vast-tunnel
+    restart: unless-stopped
+    networks:
+      - vast-net
+    environment:
+      TUNNEL_SCAN_SECONDS: "${TUNNEL_SCAN_SECONDS:-5}"
+      REMOTE_LLM_PORT: "${REMOTE_LLM_PORT:-18000}"
+    volumes:
+      # SSH key của vast-tunnel: mount vào /vast-ssh (script đọc đúng chỗ này)
+      - /home/Docker/vast-tunnel/ssh:/vast-ssh:rw
+      - /home/Docker/vast-tunnel/instances.txt:/etc/vast/instances.txt:rw
+
+  # ============================================================
+  # 2) VAST GATEWAY — lifecycle + routing (KHÔNG đụng CPA config)
+  # ============================================================
+  vast-gateway:
+    build: ./gateway
+    container_name: vast-gateway
+    restart: unless-stopped
+    networks:
+      - vast-net
+    depends_on:
+      - vast-tunnel
+    expose:
+      - "18000"
+    environment:
+      VAST_API_KEY: "${VAST_API_KEY}"
+      API_LLM_SERVER: "${API_LLM_SERVER}"
+      VAST_PROVIDER_NAME: "${VAST_PROVIDER_NAME:-ln.vastai}"
+      VAST_INSTANCE_IDS: "${VAST_INSTANCE_IDS:-}"
+      VAST_CLUSTER_LABEL: "${VAST_CLUSTER_LABEL:-cpa-vllm}"
+      VAST_MANAGE_ALL_INSTANCES: "${VAST_MANAGE_ALL_INSTANCES:-false}"
+      AUTO_SYNC_INSTANCES: "${AUTO_SYNC_INSTANCES:-true}"
+      AUTO_SCALE_ENABLED: "${AUTO_SCALE_ENABLED:-true}"
+      IDLE_TIMEOUT_MINUTES: "${IDLE_TIMEOUT_MINUTES:-30}"
+      BOOT_GRACE_SECONDS: "${BOOT_GRACE_SECONDS:-900}"
+      BOOT_POLL_SECONDS: "${BOOT_POLL_SECONDS:-5}"
+      SYNC_INTERVAL_SECONDS: "${SYNC_INTERVAL_SECONDS:-60}"
+      HEALTH_CACHE_SECONDS: "${HEALTH_CACHE_SECONDS:-3}"
+      REMOTE_LLM_PORT: "${REMOTE_LLM_PORT:-18000}"
+      LANGUAGE_PROMPT: "${LANGUAGE_PROMPT:-}"
+    volumes:
+      # READ-ONLY: gateway KHÔNG được ghi vào CPA config (chống corrupt YAML)
+      - /home/Docker/vast-tunnel/instances.txt:/etc/vast/instances.txt:rw
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >
+          import urllib.request;
+          urllib.request.urlopen(
+          'http://127.0.0.1:18000/__gateway/health',
+          timeout=3).read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ============================================================
+  # 3) CONFIG SYNC — cập nhật CPA config + VLLM keys an toàn (atomic)
+  # ============================================================
+  config-sync:
+    build: ./config-sync
+    container_name: config-sync
+    restart: unless-stopped
+    networks:
+      - vast-net
+    environment:
+      VAST_API_KEY: "${VAST_API_KEY}"
+      API_LLM_SERVER: "${API_LLM_SERVER}"
+      VAST_PROVIDER_NAME: "${VAST_PROVIDER_NAME:-ln.vastai}"
+      SYNC_INTERVAL_SECONDS: "${SYNC_INTERVAL_SECONDS:-60}"
+      DRY_RUN: "${CONFIG_SYNC_DRY_RUN:-false}"
+    volumes:
+      # config-sync là service DUY NHẤT được ghi CPA config (atomic, có backup)
+      - /home/Docker/CLIProxyAPI/config.yaml:/cpa-config.yaml:rw
+      - /home/Docker/CLIProxyAPI/config.yaml.bak:/cpa-config.yaml.bak:rw
+      - /home/Docker/vast-tunnel/instances.txt:/etc/vast/instances.txt:ro
+      # SSH key để cập nhật API key trên VLLM nodes (chỉ đọc)
+      - /home/Docker/vast-tunnel/ssh:/vast-ssh:ro
+      # State (change detection) — persistent trên host
+      - /home/Docker/vast-tunnel/state:/state:rw
+
+  # ============================================================
+  # 4) CLIPROXYAPI (+ VAST CLUSTER BENCH plugin)
+  # ============================================================
+  cli-proxy-api:
+    image: eceasy/cli-proxy-api:latest
+    pull_policy: if_not_present
+    container_name: cli-proxy-api
+    restart: unless-stopped
+    init: true
+    networks:
+      - vast-net
+    depends_on:
+      vast-gateway:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:1455:1455"
+      - "8317:8317"
+    environment:
+      TZ: "${TZ:-Europe/Paris}"
+      MANAGEMENT_PASSWORD: "${MANAGEMENT_PASSWORD}"
+      OPENCODEX_DEVICE_ID_PATH: "${OPENCODEX_DEVICE_ID_PATH:-/data/opencodex/device-id}"
+      CPA_PLUGIN_GITHUB_TOKEN: "${CPA_PLUGIN_GITHUB_TOKEN:-}"
+      CPA_CODEX_COMPACTION_KEY: "${CPA_CODEX_COMPACTION_KEY:-}"
+      # >>> VAST CLUSTER BENCH plugin <<<
+      VAST_API_KEY: "${VAST_API_KEY}"
+      VAST_TUNNEL_DIR: "/vast-tunnel"
+    volumes:
+      - /home/Docker/CLIProxyAPI/config.yaml:/CLIProxyAPI/config.yaml:rw
+      - /home/Docker/CLIProxyAPI/.cli-proxy-api:/root/.cli-proxy-api:rw
+      - /home/Docker/CLIProxyAPI/plugins:/CLIProxyAPI/plugins:rw
+      - /home/Docker/CLIProxyAPI/logs:/CLIProxyAPI/logs:rw
+      - /home/Docker/CLIProxyAPI/opencodex:/data/opencodex:rw
+      # >>> VAST CLUSTER BENCH: mount tunnel → tự dò instances.txt + key SSH <<<
+      - /home/Docker/vast-tunnel:/vast-tunnel:ro
