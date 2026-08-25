@@ -97,9 +97,9 @@ def update_cpa_config(state):
     if not isinstance(doc, dict):
         return False, state
 
-    providers = doc.get("providers")
+    providers = doc.get("openai-compatibility")
     if not isinstance(providers, list):
-        log("⚠️ No providers list in CPA config")
+        log("⚠️ No openai-compatibility list in CPA config")
         return False, state
 
     target = None
