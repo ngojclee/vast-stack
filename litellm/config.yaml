@@ -16,10 +16,12 @@
 #       gemini-tts, deepgram-nova3 ...      (audio — chọn theo key anh có)
 #   - Settings → Virtual Keys      → phát key riêng cho từng client
 #
-# Bind trong compose là ./litellm/config.yaml (mount thẳng từ repo) — sửa
-# file này trong repo → commit → Portainer redeploy là áp dụng. KHÔNG copy
-# ra đường dẫn tuyệt đối trên host (thiếu file → Docker tạo dir → crash
-# IsADirectoryError).
+# Config giờ nằm TRỰC TIẾP trong compose.yml (env LITELLM_CONFIG_YAML,
+# block `environment:` của service litellm) — KHÔNG còn bind-mount file.
+# File này chỉ còn là BẢNG THAM CHIẾU để đọc/dịch; khi cần sửa config boot
+# thì sửa block LITELLM_CONFIG_YAML trong compose.yml → commit → redeploy.
+# (Lý do bỏ mount: thiếu file nguồn → Docker âm thầm tạo directory ngay
+#  đường đích → IsADirectoryError khi litellm mở /app/config.yaml.)
 # ================================================================
 
 litellm_settings:

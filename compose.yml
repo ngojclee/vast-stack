@@ -187,13 +187,17 @@ services:
         condition: service_healthy
     ports:
       - "4000:4000"
+    # KHÔNG bind-mount file config nữa (nguồn gốc lỗi IsADirectoryError:
+    # thiếu file → Docker âm thầm tạo DIRECTORY ngay đường đích).
+    # Config được nhét thẳng vào env LITELLM_CONFIG_YAML, lúc boot container
+    # tự ghi ra /tmp rồi chạy. Miễn nhiễm mọi sự cố mount/git-pull.
+    entrypoint:
+      - /bin/sh
+      - -c
     command:
-      - --config
-      - /app/config.yaml
-      - --port
-      - "4000"
-      - --host
-      - 0.0.0.0
+      - |
+        printf '%s' "$$LITELLM_CONFIG_YAML" > /tmp/litellm-config.yaml
+        exec /app/.venv/bin/litellm --config /tmp/litellm-config.yaml --port 4000 --host 0.0.0.0
     environment:
       TZ: "${TZ:-Europe/Paris}"
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
@@ -201,11 +205,27 @@ services:
       STORE_MODEL_IN_DB: "True"
       # Các API key (CPA, OpenAI, ElevenLabs, Groq, Gemini, Deepgram...)
       # KHÔNG đặt ở đây — tạo trong GUI: Settings → LLM Credentials.
-    volumes:
-      # Bind trực tiếp từ repo (Portainer clone repo khi deploy stack).
-      # KHÔNG copy file ra host → hết lỗi "IsADirectoryError" do Docker
-      # tự tạo directory khi thiếu file nguồn. Sửa config = sửa repo + redeploy.
-      - ./litellm/config.yaml:/app/config.yaml:ro
+      # Đây là toàn bộ nội dung litellm config (chỉ placeholder + master_key ref):
+      LITELLM_CONFIG_YAML: |
+        litellm_settings:
+          drop_params: true
+          num_retries: 2
+          request_timeout: 600
+        general_settings:
+          master_key: os.environ/LITELLM_MASTER_KEY
+        router_settings:
+          routing_strategy: simple-shuffle
+          allowed_fails: 3
+          cooldown_time: 60
+          retry_policy:
+            BadRequestErrorRetries: 1
+            TimeoutErrorRetries: 2
+            RateLimitErrorRetries: 3
+        model_list:
+          - model_name: "litellm-placeholder"
+            litellm_params:
+              model: openai/gpt-4o-mini
+              api_key: sk-not-used-add-real-models-in-ui
     healthcheck:
       test:
         - CMD
