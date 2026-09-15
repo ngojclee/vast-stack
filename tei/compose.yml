@@ -1,0 +1,148 @@
+# ================================================================
+# TEI + Infinity stack — embeddings & rerankers trên máy llm (10.21.4.101)
+#
+# Create stack mới trong Portainer (server llm):
+#   Repository: https://github.com/ngojclee/vast-stack.git
+#   Compose path: tei/compose.yml
+# (không cần env nào; mọi cấu hình nằm trong file này)
+#
+# MỘT LƯU Ý QUY HOẠCH CỔNG:
+#  - 8080 (embeddings) và 8081 (rerank TEI) hiện DO CONTAINER CŨ chạy bằng
+#    `docker run` tay chiếm. Stack này KHÔNG đặt container_name trùng 2 service
+#    TEI để Portainer tự quản; khi deploy, 2 service TEI sẽ báo
+#    "address already in use" cho tới khi bạn dọn container cũ:
+#        docker stop tei-bge-m3 tei-bge-reranker && docker rm tei-bge-m3 tei-bge-reranker
+#      rồi bấm redeploy/recreate stack (hoặc chờ restart: unless-stopped tự thắng).
+#  - infinity-reranker chạy cổng 8082, KHÔNG đụng gì 8080/8081 hiện hữu →
+#    deploy xong là LiteLLM dùng được ngay, an toàn 100%.
+#  - Khi mọi client đã chuyển sang gọi rerank qua LiteLLM :4000, bạn có thể
+#    XÓA service tei-reranker và đổi port infinity 8082→8081 (1 reranker duy nhất).
+#
+# Volume /home/Docker/tei-data là cache model chung của TEI và Infinity
+# (cùng layout HF cache) → model reranker KHÔNG phải tải lại.
+# ================================================================
+
+name: tei
+
+services:
+  # ============ EMBEDDINGS — giữ nguyên như bản TEI cũ ============
+  tei-embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    container_name: tei-bge-m3
+    restart: unless-stopped
+    ports:
+      - "10.21.4.101:8080:80"
+    volumes:
+      - /home/Docker/tei-data:/data
+    environment:
+      HUGGINGFACE_HUB_CACHE: /data
+      RAYON_NUM_THREADS: "3"
+    command:
+      - "--model-id"
+      - "BAAI/bge-m3"
+      - "--max-concurrent-requests"
+      - "4"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--max-client-batch-size"
+      - "16"
+      - "--payload-limit"
+      - "1000000"
+    cpus: "3"
+    mem_limit: 10g
+    memswap_limit: 10g
+    pids_limit: 128
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:80/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ============ RERANK — TEI native (giữ cho client cũ đang gọi {query,texts}) ============
+  tei-reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    container_name: tei-bge-reranker
+    restart: unless-stopped
+    ports:
+      - "10.21.4.101:8081:80"
+    volumes:
+      - /home/Docker/tei-data:/data
+    environment:
+      HUGGINGFACE_HUB_CACHE: /data
+      RAYON_NUM_THREADS: "1"
+    command:
+      - "--model-id"
+      - "BAAI/bge-reranker-v2-m3"
+      - "--max-concurrent-requests"
+      - "4"
+      - "--max-batch-tokens"
+      - "1024"
+      - "--max-client-batch-size"
+      - "10"
+      - "--payload-limit"
+      - "1000000"
+    cpus: "1"
+    mem_limit: 4g
+    memswap_limit: 4g
+    pids_limit: 128
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:80/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ============ RERANK — Infinity: CÙNG model, API chuẩn Cohere /v1/rerank ============
+  # Đây là con LiteLLM nói chuyện được (branch "infinity" có sẵn trong LiteLLM).
+  # Test trực tiếp:
+  #   curl -s http://10.21.4.101:8082/v1/rerank -H "Content-Type: application/json" \
+  #     -d '{"model":"BAAI/bge-reranker-v2-m3","query":"con meo","documents":["meo ngu","cho chay"]}'
+  infinity-reranker:
+    image: michaelf34/infinity:latest-cpu
+    container_name: infinity-reranker
+    restart: unless-stopped
+    ports:
+      - "10.21.4.101:8082:8080"
+    volumes:
+      - /home/Docker/tei-data:/data
+    environment:
+      HF_HOME: /data
+    command:
+      - v2
+      - --model-id
+      - BAAI/bge-reranker-v2-m3
+      - --engine
+      - torch
+      - --api-port
+      - "8080"
+      - --batch-size
+      - "8"
+    cpus: "1"
+    mem_limit: 4g
+    memswap_limit: 4g
+    pids_limit: 128
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
