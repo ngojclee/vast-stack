@@ -1,89 +1,57 @@
 # ================================================================
-# TEI + Infinity stack — embeddings & rerank cho máy llm (10.21.4.101)
+# Stack: Infinity — MỘT container phục vụ CẢ embeddings + rerank (máy llm 10.21.4.101)
 #
-# Deploy qua Portainer (server llm) → Stacks → Add stack:
-#   Repository: https://github.com/ngojclee/vast-stack.git
-#   Compose path: tei/compose.yml
-# (không cần env nào — mọi cấu hình nằm trong file này)
+#   Embeddings      : POST http://10.21.4.101:8080/v1/embeddings   (BAAI/bge-m3, 1024 chiều)
+#   Rerank          : POST http://10.21.4.101:8080/v1/rerank       (BAAI/bge-reranker-v2-m3)
+#   Danh sách model : GET  http://10.21.4.101:8080/v1/models
+#   Health          : GET  http://10.21.4.101:8080/health
 #
-# TRƯỚC KHI DEPLOY — xoá 2 container cũ đang chạy tay (chiếm tên + cổng 8080/8081):
-#   docker rm -f tei-bge-m3 tei-bge-reranker
-# (embeddings sẽ nạp lại từ cache /home/Docker/tei-data trong ~1 phút)
+#   MỘT cổng duy nhất (8080) — chọn model bằng field "model" trong body.
+#   Nhiều request tới 2 model khác nhau chạy SONG SONG được
+#   (đã đo: 2 embed + 2 rerank cùng lúc → tất cả 200 OK).
 #
-# Sau khi deploy:
-#   - Embeddings : http://10.21.4.101:8080   (BAAI/bge-m3, TEI)
-#   - Rerank     : http://10.21.4.101:8081   (BAAI/bge-reranker-v2-m3, Infinity,
-#                  API chuẩn Cohere /rerank → đi thẳng vào LiteLLM branch "infinity/")
-#   Test nhanh:
-#     curl -s http://10.21.4.101:8081/health
-#     curl -s http://10.21.4.101:8081/rerank -H 'Content-Type: application/json' \
-#       -d '{"model":"BAAI/bge-reranker-v2-m3","query":"con mèo đang ngủ ở đâu",
-#            "documents":["con mèo đang ngủ trên ghế sofa","trời hôm nay mưa rất to"]}'
+# DEPLOY: Portainer (server llm) → stack `tei` → Editor → dán file này → Update the stack
+#   (giữ tên stack `tei` để update tại chỗ, khỏi tạo stack mới)
+# TRƯỚC KHI UPDATE — xoá 2 container cũ đang chiếm tên + cổng 8080/8081:
+#   docker rm -f tei-bge-m3 infinity-rerank
+#   (models nạp lại từ cache /home/Docker/tei-data; boot ~20-40s, không cần tải mạng)
+#
+# TEST nhanh sau khi deploy:
+#   curl -s http://10.21.4.101:8080/health
+#   curl -s http://10.21.4.101:8080/v1/embeddings -H 'Content-Type: application/json' \
+#     -d '{"model":"BAAI/bge-m3","input":"xin chào"}'
+#   curl -s http://10.21.4.101:8080/v1/rerank -H 'Content-Type: application/json' \
+#     -d '{"model":"BAAI/bge-reranker-v2-m3","query":"con mèo đang ngủ ở đâu","documents":["con mèo đang ngủ trên ghế sofa","trời hôm nay mưa rất to"]}'
 #
 # GHI CHÚ QUAN TRỌNG:
-#  - TEI reranker cũ (API riêng {query,texts}) ĐÃ BỊ THAY hoàn toàn: LiteLLM
-#    không có route nào gửi đúng format đó; Infinity nói chuẩn Cohere nên
-#    LiteLLM route trực tiếp được. Nếu có client cũ gọi thẳng kiểu {query,texts}
-#    thì phải chuyển sang gọi qua LiteLLM :4000.
-#  - Model cache dùng chung /home/Docker/tei-data (cả 2 service, cùng layout HF cache).
-#  - Cấu hình Infinity dưới đây là bản ĐÃ CHẠY THỬ NGHIỆM NGUYÊN XI trên máy llm
-#    (boot ~15s, rerank OK, RAM ~1.2-1.6GB) — đừng đổi lung tung.
+#  - `--url-prefix /v1`: giữ ĐÚNG các đường dẫn cũ (/v1/embeddings, /v1/rerank) →
+#    DeepTutor + LiteLLM KHÔNG phải đổi URL. (Đường KHÔNG prefix sẽ trả 404 — đúng thiết kế.)
+#    Riêng LiteLLM: model rerank cần api_base = http://10.21.4.101:8080/v1
+#    (branch "infinity" tự thêm "/rerank"); model embeddings giữ nguyên như cũ.
+#  - KHÔNG cần API key: Infinity mặc định không kiểm tra auth (client gửi gì cũng được,
+#    LiteLLM để api_key "none"). Muốn bật auth: thêm flag `--api-key <key>`
+#    → client phải gửi header `Authorization: Bearer <key>`.
+#  - `--engine torch`: BẮT BUỘC (engine optimum lỗi thiếu file ONNX với 2 model này).
+#  - `--no-model-warmup`: bỏ warmup (CPU yếu nên warmup rất lâu) → boot nhanh.
+#  - Thêm model mới: thêm 1 dòng `--model-id <repo>` (1 instance chạy nhiều model;
+#    option riêng của từng model thì truyền lặp theo đúng thứ tự).
+#  - Cache model dùng chung /home/Docker/tei-data (layout HF cache) — đã có sẵn cả 2 model.
+#  - Bản này đã CHẠY THỬ NGHIỆM NGUYÊN XI trên máy llm (2026-09-15): boot ~20-40s,
+#    /v1/embeddings dims=1024 OK, /v1/rerank OK, RAM ~3.0GB cho cả 2 model.
 # ================================================================
 
 name: tei
 
 services:
-  # ============ EMBEDDINGS — TEI, giữ nguyên cấu hình đã tinh chỉnh ============
-  tei-embeddings:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
-    container_name: tei-bge-m3
-    restart: unless-stopped
-    ports:
-      - "10.21.4.101:8080:80"
-    volumes:
-      - /home/Docker/tei-data:/data
-    environment:
-      HUGGINGFACE_HUB_CACHE: /data
-      RAYON_NUM_THREADS: "3"
-    command:
-      - "--model-id"
-      - "BAAI/bge-m3"
-      - "--max-concurrent-requests"
-      - "4"
-      - "--max-batch-tokens"
-      - "2048"
-      - "--max-client-batch-size"
-      - "16"
-      - "--payload-limit"
-      - "1000000"
-    cpus: "3"
-    mem_limit: 10g
-    memswap_limit: 10g
-    pids_limit: 128
-    shm_size: 256m
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:80/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
-
-  # ============ RERANK — Infinity (bge-reranker-v2-m3, API chuẩn Cohere) ============
-  infinity-rerank:
+  infinity:
     image: michaelf34/infinity:latest-cpu
-    container_name: infinity-rerank
+    container_name: infinity
     restart: unless-stopped
     ports:
-      - "10.21.4.101:8081:8080"
+      - "10.21.4.101:8080:8080"
     volumes:
       - /home/Docker/tei-data:/data
     environment:
-      # Cache model chung với TEI (cùng layout HF cache) → không tải lại
       HF_HOME: /data
       HF_HUB_CACHE: /data
       HUGGINGFACE_HUB_CACHE: /data
@@ -91,13 +59,17 @@ services:
     command:
       - v2
       - --engine
-      - torch                 # engine "optimum" (mặc định) lỗi: model này không có file ONNX
+      - torch                        # bắt buộc — optimum lỗi ONNX với 2 model này
       - --model-id
-      - BAAI/bge-reranker-v2-m3
+      - BAAI/bge-m3                  # embeddings — 1024 chiều, tối đa ~8192 token
+      - --model-id
+      - BAAI/bge-reranker-v2-m3      # rerank — trả relevance score (không có "dim")
       - --port
       - "8080"
-      - --no-model-warmup     # warmup trên CPU yếu bị treo/OOM; tắt để boot nhanh (~15s)
-    cpus: "2"
+      - --url-prefix
+      - "/v1"                        # giữ đường dẫn /v1/... cho các client cũ
+      - --no-model-warmup            # warmup CPU yếu bị treo — tắt để boot nhanh
+    cpus: "3"
     mem_limit: 6g
     memswap_limit: 6g
     pids_limit: 128
