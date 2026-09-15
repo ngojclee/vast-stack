@@ -46,11 +46,6 @@ router_settings:
     TimeoutErrorRetries: 2
     RateLimitErrorRetries: 3
 
-# model_list chỉ cần 1 entry placeholder để proxy boot chắc chắn (litellm
-# có phiên bản không chịu empty list); model thật thêm trong GUI → lưu
-# Postgres (STORE_MODEL_IN_DB=True) và override qua UI.
-model_list:
-  - model_name: "litellm-placeholder"
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: sk-not-used-add-real-models-in-ui
+# model_list để TRỐNG khi STORE_MODEL_IN_DB=True (litellm ≥1.102 boot OK):
+# toàn bộ model thật nằm trong Postgres, thêm qua GUI hoặc POST /model/new.
+model_list: []

@@ -226,11 +226,9 @@ services:
             BadRequestErrorRetries: 1
             TimeoutErrorRetries: 2
             RateLimitErrorRetries: 3
-        model_list:
-          - model_name: "litellm-placeholder"
-            litellm_params:
-              model: openai/gpt-4o-mini
-              api_key: sk-not-used-add-real-models-in-ui
+        model_list: []
+        # (1.102+ boot được với list trống khi STORE_MODEL_IN_DB=True;
+        #  model thật nằm trong Postgres, thêm qua GUI hoặc POST /model/new)
     healthcheck:
       test:
         - CMD
