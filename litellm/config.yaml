@@ -31,6 +31,11 @@ litellm_settings:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  # Tắt login GUI bằng master key/UI_USERNAME+UI_PASSWORD (cảnh báo
+  # "Environment-credential login is enabled"). Đăng nhập = admin account
+  # tạo trong GUI. Master key VẪN còn hiệu lực làm API key cho client.
+  # Quên mật khẩu admin? Xóa dòng này + redeploy là login lại bằng master key.
+  disable_env_credential_login: true
 
 router_settings:
   routing_strategy: simple-shuffle

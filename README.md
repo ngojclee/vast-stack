@@ -132,6 +132,8 @@ KHÔNG có env API key nào — key upstream tạo trong GUI:
 
 **Dùng:**
 - API: `http://<host>:4000/v1` — key = virtual key (mỗi client 1 key)
-- GUI: `http://<host>:4000/ui` (login = `LITELLM_MASTER_KEY`)
+- GUI: `http://<host>:4000/ui` — login = **admin account tạo trong GUI**
+  (`disable_env_credential_login: true` đã bật → master key không login GUI được nữa,
+  chỉ còn là API key. Quên mật khẩu admin: tạm xóa dòng đó + redeploy.)
 - TTS: POST `/v1/audio/speech` · STT: POST `/v1/audio/transcriptions`
 - Text qua CPA: model `cpa/<tên model CPA>` (vd `cpa/philbert440/Qwen3.8-27B-Uncensored-Aggressive-W4A16-AWQ`)
