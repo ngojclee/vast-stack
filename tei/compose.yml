@@ -4,40 +4,42 @@
 #   Embeddings      : POST http://10.21.4.101:8080/v1/embeddings   (BAAI/bge-m3, 1024 chiều)
 #   Rerank          : POST http://10.21.4.101:8080/v1/rerank       (BAAI/bge-reranker-v2-m3)
 #   Danh sách model : GET  http://10.21.4.101:8080/v1/models
-#   Health          : GET  http://10.21.4.101:8080/health
+#   Health          : GET  http://10.21.4.101:8080/health   (KHÔNG cần key)
 #
 #   MỘT cổng duy nhất (8080) — chọn model bằng field "model" trong body.
 #   Nhiều request tới 2 model khác nhau chạy SONG SONG được
 #   (đã đo: 2 embed + 2 rerank cùng lúc → tất cả 200 OK).
 #
-# DEPLOY: Portainer (server llm) → stack `tei` → Editor → dán file này → Update the stack
-#   (giữ tên stack `tei` để update tại chỗ, khỏi tạo stack mới)
+#   🔐 AUTH ĐÃ BẬT: mọi API cần header `Authorization: Bearer <KEY>` (trừ /health).
+#   KEY không nằm trong file này (repo là public!) — điền biến INFINITY_API_KEY
+#   ở Portainer → Environment variables (giá trị trong file tei-stack.env gửi kèm).
+#
+# DEPLOY: Portainer (server llm) → stack `tei` → Editor → dán file này
+#   + thêm biến môi trường INFINITY_API_KEY (xem tei-stack.env) → Update the stack
 # TRƯỚC KHI UPDATE — xoá 2 container cũ đang chiếm tên + cổng 8080/8081:
 #   docker rm -f tei-bge-m3 infinity-rerank
 #   (models nạp lại từ cache /home/Docker/tei-data; boot ~20-40s, không cần tải mạng)
 #
-# TEST nhanh sau khi deploy:
+# TEST nhanh sau khi deploy (KEY = giá trị trong tei-stack.env):
 #   curl -s http://10.21.4.101:8080/health
-#   curl -s http://10.21.4.101:8080/v1/embeddings -H 'Content-Type: application/json' \
-#     -d '{"model":"BAAI/bge-m3","input":"xin chào"}'
-#   curl -s http://10.21.4.101:8080/v1/rerank -H 'Content-Type: application/json' \
-#     -d '{"model":"BAAI/bge-reranker-v2-m3","query":"con mèo đang ngủ ở đâu","documents":["con mèo đang ngủ trên ghế sofa","trời hôm nay mưa rất to"]}'
+#   curl -s -H "Authorization: Bearer KEY" http://10.21.4.101:8080/v1/models
+#   curl -s -H "Authorization: Bearer KEY" -H 'Content-Type: application/json' \
+#     http://10.21.4.101:8080/v1/embeddings -d '{"model":"BAAI/bge-m3","input":"xin chào"}'
+#   curl -s -H "Authorization: Bearer KEY" -H 'Content-Type: application/json' \
+#     http://10.21.4.101:8080/v1/rerank -d '{"model":"BAAI/bge-reranker-v2-m3","query":"con mèo đang ngủ ở đâu","documents":["con mèo đang ngủ trên ghế sofa","trời hôm nay mưa rất to"]}'
 #
 # GHI CHÚ QUAN TRỌNG:
 #  - `--url-prefix /v1`: giữ ĐÚNG các đường dẫn cũ (/v1/embeddings, /v1/rerank) →
-#    DeepTutor + LiteLLM KHÔNG phải đổi URL. (Đường KHÔNG prefix sẽ trả 404 — đúng thiết kế.)
-#    Riêng LiteLLM: model rerank cần api_base = http://10.21.4.101:8080/v1
-#    (branch "infinity" tự thêm "/rerank"); model embeddings giữ nguyên như cũ.
-#  - KHÔNG cần API key: Infinity mặc định không kiểm tra auth (client gửi gì cũng được,
-#    LiteLLM để api_key "none"). Muốn bật auth: thêm flag `--api-key <key>`
-#    → client phải gửi header `Authorization: Bearer <key>`.
+#    DeepTutor + LiteLLM không phải đổi URL. (Đường KHÔNG prefix trả 404 — đúng thiết kế.)
+#  - LiteLLM: cả 2 model (embed + rerank) đã/đang được trỏ đúng về cổng 8080
+#    với branch "infinity" + key tương ứng (embed đã xong, rerank cập nhật ngay sau deploy).
 #  - `--engine torch`: BẮT BUỘC (engine optimum lỗi thiếu file ONNX với 2 model này).
 #  - `--no-model-warmup`: bỏ warmup (CPU yếu nên warmup rất lâu) → boot nhanh.
 #  - Thêm model mới: thêm 1 dòng `--model-id <repo>` (1 instance chạy nhiều model;
 #    option riêng của từng model thì truyền lặp theo đúng thứ tự).
 #  - Cache model dùng chung /home/Docker/tei-data (layout HF cache) — đã có sẵn cả 2 model.
 #  - Bản này đã CHẠY THỬ NGHIỆM NGUYÊN XI trên máy llm (2026-09-15): boot ~20-40s,
-#    /v1/embeddings dims=1024 OK, /v1/rerank OK, RAM ~3.0GB cho cả 2 model.
+#    /v1/embeddings dims=1024 OK, /v1/rerank OK, auth 401/200 OK, RAM ~3.0GB cho cả 2 model.
 # ================================================================
 
 name: tei
@@ -56,6 +58,8 @@ services:
       HF_HUB_CACHE: /data
       HUGGINGFACE_HUB_CACHE: /data
       DO_NOT_TRACK: "1"
+      # 🔐 Key API — điền từ Portainer → Environment variables (repo public, không lưu key ở đây)
+      INFINITY_API_KEY: "${INFINITY_API_KEY:-__CHUA_DIEN_KEY_TRONG_PORTAINER__}"
     command:
       - v2
       - --engine
