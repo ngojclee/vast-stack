@@ -106,25 +106,32 @@ docker compose --env-file .env up -d --build
 
 `litellm` + `litellm-db` là 2 service bổ sung: LiteLLM lo **TTS/STT đa
 provider + virtual key + GUI chi phí**, CPA giữ nguyên text/OAuth/vision
-(plugin agy-identity-bridge…). LiteLLM delegate text về CPA qua
-`model_name: cpa/*` → dùng chung 1 cổng :4000 nếu muốn.
+(plugin agy-identity-bridge…). **Toàn bộ cấu hình động làm trong GUI**, file
+`litellm/config.yaml` chỉ còn phần boot tối thiểu.
 
-**Setup 1 lần trên server (Portainer env đã có biến, config file copy tay):**
-```shell
-# trên CT101 (pct enter 101) — <stack-dir> là nơi Portainer clone repo
-mkdir -p /home/Docker/litellm
-cp <stack-dir>/litellm/config.yaml /home/Docker/litellm/config.yaml
-```
-Sửa `litellm/config.yaml` trong repo → redeploy → cp lại lệnh trên.
-(Design giống CPA: file config trên host là source-of-truth, compose chỉ mount.)
+**KHÔNG cần setup gì thêm trên host** — compose bind `./litellm/config.yaml`
+trực tiếp từ repo mà Portainer clone khi deploy. Sửa config = sửa file trong
+repo → redeploy. (Tránh bind-mount path tuyệt đối: nếu file nguồn thiếu,
+Docker âm thầm tạo DIRECTORY → `IsADirectoryError: '/app/config.yaml'`.)
 
-**Env cần thêm:** mục LITELLM trong `.env.example` — bắt buộc
-`LITELLM_MASTER_KEY` + `LITELLM_DB_PASSWORD`; còn lại điền key provider
-audio định dùng (OPENAI / ELEVENLABS / GROQ / GEMINI / DEEPGRAM).
+**Env cần thêm (Portainer → stack → Environment variables):**
+- `LITELLM_MASTER_KEY` — password GUI `/ui` + key admin
+  (`python -c "import secrets; print('sk-litellm-'+secrets.token_hex(16))"`)
+- `LITELLM_DB_PASSWORD` — mật khẩu Postgres nội bộ container
+  (`python -c "import secrets; print(secrets.token_urlsafe(24))"`)
+
+KHÔNG có env API key nào — key upstream tạo trong GUI:
+
+| Việc | Ở đâu trong GUI |
+|---|---|
+| Key CPA / OpenAI / ElevenLabs / Groq / Gemini / Deepgram | Settings → **LLM Credentials** |
+| Delegate text → CPA: model `cpa/*`, api_base `http://cli-proxy-api:8317/v1`, credential = cpa-cred | **Models + Endpoints → Add Model** |
+| Model audio (`gpt-4o-mini-tts`, `whisper-large-v3-turbo`, `eleven_turbo_v2_5`, `gemini-tts`, `deepgram-nova3`...) | Models + Endpoints → Add Model |
+| Key phát cho từng client (Hermes, máy B, app...) + budget riêng | Settings → **Virtual Keys** |
+| Chi phí / log từng request, từng key | GUI dashboard |
 
 **Dùng:**
-- API: `http://<host>:4000/v1` — key = `LITELLM_MASTER_KEY` hoặc virtual key tạo trong GUI
-- GUI: `http://<host>:4000/ui` (login = master key)
-- TTS: POST `/v1/audio/speech` — model `gpt-4o-mini-tts` / `eleven_turbo_v2_5` / `gemini-tts`
-- STT: POST `/v1/audio/transcriptions` — model `whisper-1` / `whisper-large-v3-turbo` / `deepgram-nova3`
-- Text qua CPA: model `cpa/philbert440/Qwen3.8-27B-Uncensored-Aggressive-W4A16-AWQ` (khớp mọi model CPA, không cần khai báo từng cái)
+- API: `http://<host>:4000/v1` — key = virtual key (mỗi client 1 key)
+- GUI: `http://<host>:4000/ui` (login = `LITELLM_MASTER_KEY`)
+- TTS: POST `/v1/audio/speech` · STT: POST `/v1/audio/transcriptions`
+- Text qua CPA: model `cpa/<tên model CPA>` (vd `cpa/philbert440/Qwen3.8-27B-Uncensored-Aggressive-W4A16-AWQ`)

@@ -1,10 +1,25 @@
 # ================================================================
-# LiteLLM Proxy config — audio gateway (TTS/STT) + delegate CPA
+# LiteLLM Proxy config — AUDIO GATEWAY, chạy song song CLIProxyAPI
 #
-# Đây là SOURCE OF TRUTH. Copy 1 lần lên server:
-#   mkdir -p /home/Docker/litellm
-#   cp litellm/config.yaml /home/Docker/litellm/config.yaml
-# (compose mount /home/Docker/litellm/config.yaml — sửa xong nhớ cp lại)
+# TRIẾT LÝ: file này CHỈ có phần tối thiểu (kỹ thuật).
+# MỌI API KEY / upstream tạo & sửa trong GUI:
+#   http://<host>:4000/ui
+#   - Settings → LLM Credentials   → thêm cpa-cred (key CPA), openai-cred,
+#                                    groq-cred, elevenlabs-cred... (không hardcode)
+#   - Models + Endpoints → Add Model:
+#       model_name: cpa/*                    (delegate text → CPA, giữ plugin
+#                                             agy-identity-bridge / vision-bridge)
+#       litellm_params: { model: openai/*,
+#                         api_base: http://cli-proxy-api:8317/v1,
+#                         litellm_credential_name: cpa-cred }
+#       model_name: gpt-4o-mini-tts, whisper-large-v3-turbo, eleven_turbo_v2_5,
+#       gemini-tts, deepgram-nova3 ...      (audio — chọn theo key anh có)
+#   - Settings → Virtual Keys      → phát key riêng cho từng client
+#
+# Bind trong compose là ./litellm/config.yaml (mount thẳng từ repo) — sửa
+# file này trong repo → commit → Portainer redeploy là áp dụng. KHÔNG copy
+# ra đường dẫn tuyệt đối trên host (thiếu file → Docker tạo dir → crash
+# IsADirectoryError).
 # ================================================================
 
 litellm_settings:
@@ -24,63 +39,11 @@ router_settings:
     TimeoutErrorRetries: 2
     RateLimitErrorRetries: 3
 
+# model_list chỉ cần 1 entry placeholder để proxy boot chắc chắn (litellm
+# có phiên bản không chịu empty list); model thật thêm trong GUI → lưu
+# Postgres (STORE_MODEL_IN_DB=True) và override qua UI.
 model_list:
-  # ============ DELEGATE → CLIProxyAPI (text/OAuth/vision giữ nguyên ở CPA) ============
-  # Gọi: model "cpa/<tên model CPA>" → http://cli-proxy-api:8317/v1/<tên model>
-  # VD: cpa/philbert440/Qwen3.8-27B-Uncensored-Aggressive-W4A16-AWQ
-  - model_name: "cpa/*"
+  - model_name: "litellm-placeholder"
     litellm_params:
-      model: openai/*
-      api_base: http://cli-proxy-api:8317/v1
-      api_key: os.environ/CPA_API_KEY
-
-  # ============ AUDIO — chỉ bật provider nào CÓ KEY trong .env ============
-  # OpenAI TTS + Whisper STT (cần OPENAI_API_KEY)
-  - model_name: "gpt-4o-mini-tts"
-    litellm_params:
-      model: openai/gpt-4o-mini-tts
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: "tts-1-hd"
-    litellm_params:
-      model: openai/tts-1-hd
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: "whisper-1"
-    litellm_params:
-      model: openai/whisper-1
-      api_key: os.environ/OPENAI_API_KEY
-
-  # Groq Whisper STT (cần GROQ_API_KEY)
-  - model_name: "whisper-large-v3-turbo"
-    litellm_params:
-      model: groq/whisper-large-v3-turbo
-      api_key: os.environ/GROQ_API_KEY
-
-  # ElevenLabs TTS (cần ELEVENLABS_API_KEY)
-  - model_name: "eleven_turbo_v2_5"
-    litellm_params:
-      model: elevenlabs/eleven_turbo_v2_5
-      api_key: os.environ/ELEVENLABS_API_KEY
-
-  # Gemini TTS (cần GEMINI_API_KEY)
-  - model_name: "gemini-tts"
-    litellm_params:
-      model: gemini/gemini-2.5-flash-preview-tts
-      api_key: os.environ/GEMINI_API_KEY
-
-  # Deepgram STT (cần DEEPGRAM_API_KEY)
-  - model_name: "deepgram-nova3"
-    litellm_params:
-      model: deepgram/nova-3
-      api_key: os.environ/DEEPGRAM_API_KEY
-
-  # ============ LOCAL audio (tuỳ chọn — bật khi chạy Speaches/Kokoro ở máy A) ============
-  # - model_name: "kokoro-tts"
-  #   litellm_params:
-  #     model: openai/tts-1
-  #     api_base: http://10.21.1.101:8880/v1
-  #     api_key: "none"
-  # - model_name: "whisper-local"
-  #   litellm_params:
-  #     model: openai/whisper-1
-  #     api_base: http://10.21.1.101:8880/v1
-  #     api_key: "none"
+      model: openai/gpt-4o-mini
+      api_key: sk-not-used-add-real-models-in-ui

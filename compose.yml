@@ -199,16 +199,13 @@ services:
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
       DATABASE_URL: "postgresql://litellm:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm"
       STORE_MODEL_IN_DB: "True"
-      # key để LiteLLM gọi lại CPA (model cpa/*)
-      CPA_API_KEY: "${CPA_API_KEY:-}"
-      # audio providers — chỉ cần key của provider nào thì khai provider đó
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ELEVENLABS_API_KEY: "${ELEVENLABS_API_KEY:-}"
-      GROQ_API_KEY: "${GROQ_API_KEY:-}"
-      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
-      DEEPGRAM_API_KEY: "${DEEPGRAM_API_KEY:-}"
+      # Các API key (CPA, OpenAI, ElevenLabs, Groq, Gemini, Deepgram...)
+      # KHÔNG đặt ở đây — tạo trong GUI: Settings → LLM Credentials.
     volumes:
-      - /home/Docker/litellm/config.yaml:/app/config.yaml:ro
+      # Bind trực tiếp từ repo (Portainer clone repo khi deploy stack).
+      # KHÔNG copy file ra host → hết lỗi "IsADirectoryError" do Docker
+      # tự tạo directory khi thiếu file nguồn. Sửa config = sửa repo + redeploy.
+      - ./litellm/config.yaml:/app/config.yaml:ro
     healthcheck:
       test:
         - CMD
