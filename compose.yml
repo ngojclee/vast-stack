@@ -166,3 +166,82 @@ services:
       WATCHTOWER_REVIVE_STOPPED: "false"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # ============================================================
+  # 6) LITELLM — audio gateway (TTS/STT) + virtual keys + GUI
+  #    CHẠY SONG SONG với CPA (không thay thế):
+  #      - text / OAuth / vision-bridge  → CPA :8317 giữ nguyên
+  #      - audio (OpenAI/ElevenLabs/Groq/Gemini/Deepgram) → LiteLLM :4000
+  #      - model_name "cpa/*" delegate ngược về CPA (1 cổng thống nhất nếu muốn)
+  #    GUI:  http://<host>:4000/ui   |   API: http://<host>:4000/v1
+  # ============================================================
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    pull_policy: if_not_present
+    container_name: litellm
+    restart: unless-stopped
+    networks:
+      - vast-net
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    command:
+      - --config
+      - /app/config.yaml
+      - --port
+      - "4000"
+      - --host
+      - 0.0.0.0
+    environment:
+      TZ: "${TZ:-Europe/Paris}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      DATABASE_URL: "postgresql://litellm:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+      # key để LiteLLM gọi lại CPA (model cpa/*)
+      CPA_API_KEY: "${CPA_API_KEY:-}"
+      # audio providers — chỉ cần key của provider nào thì khai provider đó
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ELEVENLABS_API_KEY: "${ELEVENLABS_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      DEEPGRAM_API_KEY: "${DEEPGRAM_API_KEY:-}"
+    volumes:
+      - /home/Docker/litellm/config.yaml:/app/config.yaml:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness',
+          timeout=3).read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================
+  # 7) LITELLM DB — Postgres cho virtual keys + spend tracking + GUI
+  # ============================================================
+  litellm-db:
+    image: postgres:16-alpine
+    pull_policy: if_not_present
+    container_name: litellm-db
+    restart: unless-stopped
+    networks:
+      - vast-net
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: "${LITELLM_DB_PASSWORD}"
+    volumes:
+      - /home/Docker/litellm/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

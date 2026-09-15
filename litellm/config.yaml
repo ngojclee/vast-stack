@@ -1,0 +1,86 @@
+# ================================================================
+# LiteLLM Proxy config — audio gateway (TTS/STT) + delegate CPA
+#
+# Đây là SOURCE OF TRUTH. Copy 1 lần lên server:
+#   mkdir -p /home/Docker/litellm
+#   cp litellm/config.yaml /home/Docker/litellm/config.yaml
+# (compose mount /home/Docker/litellm/config.yaml — sửa xong nhớ cp lại)
+# ================================================================
+
+litellm_settings:
+  drop_params: true
+  num_retries: 2
+  request_timeout: 600
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+  allowed_fails: 3
+  cooldown_time: 60
+  retry_policy:
+    BadRequestErrorRetries: 1
+    TimeoutErrorRetries: 2
+    RateLimitErrorRetries: 3
+
+model_list:
+  # ============ DELEGATE → CLIProxyAPI (text/OAuth/vision giữ nguyên ở CPA) ============
+  # Gọi: model "cpa/<tên model CPA>" → http://cli-proxy-api:8317/v1/<tên model>
+  # VD: cpa/philbert440/Qwen3.8-27B-Uncensored-Aggressive-W4A16-AWQ
+  - model_name: "cpa/*"
+    litellm_params:
+      model: openai/*
+      api_base: http://cli-proxy-api:8317/v1
+      api_key: os.environ/CPA_API_KEY
+
+  # ============ AUDIO — chỉ bật provider nào CÓ KEY trong .env ============
+  # OpenAI TTS + Whisper STT (cần OPENAI_API_KEY)
+  - model_name: "gpt-4o-mini-tts"
+    litellm_params:
+      model: openai/gpt-4o-mini-tts
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: "tts-1-hd"
+    litellm_params:
+      model: openai/tts-1-hd
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: "whisper-1"
+    litellm_params:
+      model: openai/whisper-1
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Groq Whisper STT (cần GROQ_API_KEY)
+  - model_name: "whisper-large-v3-turbo"
+    litellm_params:
+      model: groq/whisper-large-v3-turbo
+      api_key: os.environ/GROQ_API_KEY
+
+  # ElevenLabs TTS (cần ELEVENLABS_API_KEY)
+  - model_name: "eleven_turbo_v2_5"
+    litellm_params:
+      model: elevenlabs/eleven_turbo_v2_5
+      api_key: os.environ/ELEVENLABS_API_KEY
+
+  # Gemini TTS (cần GEMINI_API_KEY)
+  - model_name: "gemini-tts"
+    litellm_params:
+      model: gemini/gemini-2.5-flash-preview-tts
+      api_key: os.environ/GEMINI_API_KEY
+
+  # Deepgram STT (cần DEEPGRAM_API_KEY)
+  - model_name: "deepgram-nova3"
+    litellm_params:
+      model: deepgram/nova-3
+      api_key: os.environ/DEEPGRAM_API_KEY
+
+  # ============ LOCAL audio (tuỳ chọn — bật khi chạy Speaches/Kokoro ở máy A) ============
+  # - model_name: "kokoro-tts"
+  #   litellm_params:
+  #     model: openai/tts-1
+  #     api_base: http://10.21.1.101:8880/v1
+  #     api_key: "none"
+  # - model_name: "whisper-local"
+  #   litellm_params:
+  #     model: openai/whisper-1
+  #     api_base: http://10.21.1.101:8880/v1
+  #     api_key: "none"

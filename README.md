@@ -101,3 +101,30 @@ docker restart cli-proxy-api vast-gateway vast-tunnel config-sync
 docker compose --env-file .env down
 docker compose --env-file .env up -d --build
 ```
+
+## LiteLLM (audio gateway — chạy song song CPA)
+
+`litellm` + `litellm-db` là 2 service bổ sung: LiteLLM lo **TTS/STT đa
+provider + virtual key + GUI chi phí**, CPA giữ nguyên text/OAuth/vision
+(plugin agy-identity-bridge…). LiteLLM delegate text về CPA qua
+`model_name: cpa/*` → dùng chung 1 cổng :4000 nếu muốn.
+
+**Setup 1 lần trên server (Portainer env đã có biến, config file copy tay):**
+```shell
+# trên CT101 (pct enter 101) — <stack-dir> là nơi Portainer clone repo
+mkdir -p /home/Docker/litellm
+cp <stack-dir>/litellm/config.yaml /home/Docker/litellm/config.yaml
+```
+Sửa `litellm/config.yaml` trong repo → redeploy → cp lại lệnh trên.
+(Design giống CPA: file config trên host là source-of-truth, compose chỉ mount.)
+
+**Env cần thêm:** mục LITELLM trong `.env.example` — bắt buộc
+`LITELLM_MASTER_KEY` + `LITELLM_DB_PASSWORD`; còn lại điền key provider
+audio định dùng (OPENAI / ELEVENLABS / GROQ / GEMINI / DEEPGRAM).
+
+**Dùng:**
+- API: `http://<host>:4000/v1` — key = `LITELLM_MASTER_KEY` hoặc virtual key tạo trong GUI
+- GUI: `http://<host>:4000/ui` (login = master key)
+- TTS: POST `/v1/audio/speech` — model `gpt-4o-mini-tts` / `eleven_turbo_v2_5` / `gemini-tts`
+- STT: POST `/v1/audio/transcriptions` — model `whisper-1` / `whisper-large-v3-turbo` / `deepgram-nova3`
+- Text qua CPA: model `cpa/philbert440/Qwen3.8-27B-Uncensored-Aggressive-W4A16-AWQ` (khớp mọi model CPA, không cần khai báo từng cái)
