@@ -213,6 +213,10 @@ services:
           request_timeout: 600
         general_settings:
           master_key: os.environ/LITELLM_MASTER_KEY
+          # BẮT BUỘC cho /model/new + quản trị model: khai báo cả Ở ĐÂY —
+          # env STORE_MODEL_IN_DB một mình KHÔNG đủ (config reload 30s đọc lại
+          # file; row DB LiteLLM_Config."general_settings" đè tiếp nếu tồn tại).
+          store_model_in_db: true
           # Tắt login GUI bằng master key / UI_USERNAME+UI_PASSWORD (cảnh báo
           # "Environment-credential login is enabled"). Đăng nhập = admin account
           # tạo trong GUI. Master key VẪN còn hiệu lực làm API key cho client.
