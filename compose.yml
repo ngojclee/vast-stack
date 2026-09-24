@@ -188,6 +188,8 @@ services:
     depends_on:
       litellm-db:
         condition: service_healthy
+      litellm-redis:
+        condition: service_healthy
     ports:
       - "4000:4000"
     # KHÔNG bind-mount file config nữa (nguồn gốc lỗi IsADirectoryError:
@@ -213,6 +215,10 @@ services:
       LITELLM_SALT_KEY: "${LITELLM_SALT_KEY:-${LITELLM_MASTER_KEY}}"
       DATABASE_URL: "postgresql://litellm:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm"
       STORE_MODEL_IN_DB: "True"
+      # Redis: shared router state/cooldown/rate-limit/cache giữa workers
+      # (xóa warning "No Redis configured"; chỉ nội bộ trong vast-net)
+      REDIS_HOST: "litellm-redis"
+      REDIS_PORT: "6379"
       # Các API key (CPA, OpenAI, ElevenLabs, Groq, Gemini, Deepgram...)
       # KHÔNG đặt ở đây — tạo trong GUI: Settings → LLM Credentials.
       # Đây là toàn bộ nội dung litellm config (chỉ placeholder + master_key ref):
@@ -279,3 +285,21 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # ============================================================
+  # 8) LITELLM REDIS — router state / cooldown / rate-limit / cache
+  #    chung cho LiteLLM. Cache-only: KHÔNG cần volume, KHÔNG expose
+  #    port ra ngoài (chỉ trong vast-net, không password là đủ).
+  # ============================================================
+  litellm-redis:
+    image: redis:7-alpine
+    pull_policy: if_not_present
+    container_name: litellm-redis
+    restart: unless-stopped
+    networks:
+      - vast-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
