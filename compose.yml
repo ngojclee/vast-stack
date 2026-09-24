@@ -9,6 +9,9 @@
 #
 # KHÔNG nhúng Python code vào compose — mỗi service build từ Dockerfile
 # riêng (gateway/, tunnel/, config-sync/). Cấu hình tập trung ở .env.
+#
+# Mọi bind-mount host đi qua DOCKER_DATA_ROOT (mặc định /home/Docker).
+# Đổi root data chỉ sửa 1 env trong Portainer — không rải path khắp file.
 # ================================================================
 
 name: vast-cpa
@@ -32,8 +35,8 @@ services:
       REMOTE_LLM_PORT: "${REMOTE_LLM_PORT:-18000}"
     volumes:
       # SSH key của vast-tunnel: mount vào /vast-ssh (script đọc đúng chỗ này)
-      - /home/Docker/vast-tunnel/ssh:/vast-ssh:rw
-      - /home/Docker/vast-tunnel/instances.txt:/etc/vast/instances.txt:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel/ssh:/vast-ssh:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel/instances.txt:/etc/vast/instances.txt:rw
 
   # ============================================================
   # 2) VAST GATEWAY — lifecycle + routing (KHÔNG đụng CPA config)
@@ -66,7 +69,7 @@ services:
       LANGUAGE_PROMPT: "${LANGUAGE_PROMPT:-}"
     volumes:
       # READ-ONLY: gateway KHÔNG được ghi vào CPA config (chống corrupt YAML)
-      - /home/Docker/vast-tunnel/instances.txt:/etc/vast/instances.txt:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel/instances.txt:/etc/vast/instances.txt:rw
     healthcheck:
       test:
         - CMD
@@ -99,13 +102,13 @@ services:
       DRY_RUN: "${CONFIG_SYNC_DRY_RUN:-false}"
     volumes:
       # config-sync là service DUY NHẤT được ghi CPA config (atomic, có backup)
-      - /home/Docker/CLIProxyAPI/config.yaml:/cpa-config.yaml:rw
-      - /home/Docker/CLIProxyAPI/config.yaml.bak:/cpa-config.yaml.bak:rw
-      - /home/Docker/vast-tunnel/instances.txt:/etc/vast/instances.txt:ro
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/CLIProxyAPI/config.yaml:/cpa-config.yaml:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/CLIProxyAPI/config.yaml.bak:/cpa-config.yaml.bak:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel/instances.txt:/etc/vast/instances.txt:ro
       # SSH key để cập nhật API key trên VLLM nodes (chỉ đọc)
-      - /home/Docker/vast-tunnel/ssh:/vast-ssh:ro
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel/ssh:/vast-ssh:ro
       # State (change detection) — persistent trên host
-      - /home/Docker/vast-tunnel/state:/state:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel/state:/state:rw
 
   # ============================================================
   # 4) CLIPROXYAPI (+ VAST CLUSTER BENCH plugin)
@@ -138,13 +141,13 @@ services:
       VAST_API_KEY: "${VAST_API_KEY}"
       VAST_TUNNEL_DIR: "/vast-tunnel"
     volumes:
-      - /home/Docker/CLIProxyAPI/config.yaml:/CLIProxyAPI/config.yaml:rw
-      - /home/Docker/CLIProxyAPI/.cli-proxy-api:/root/.cli-proxy-api:rw
-      - /home/Docker/CLIProxyAPI/plugins:/CLIProxyAPI/plugins:rw
-      - /home/Docker/CLIProxyAPI/logs:/CLIProxyAPI/logs:rw
-      - /home/Docker/CLIProxyAPI/opencodex:/data/opencodex:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/CLIProxyAPI/config.yaml:/CLIProxyAPI/config.yaml:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/CLIProxyAPI/.cli-proxy-api:/root/.cli-proxy-api:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/CLIProxyAPI/plugins:/CLIProxyAPI/plugins:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/CLIProxyAPI/logs:/CLIProxyAPI/logs:rw
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/CLIProxyAPI/opencodex:/data/opencodex:rw
       # >>> VAST CLUSTER BENCH: mount tunnel → tự dò instances.txt + key SSH <<<
-      - /home/Docker/vast-tunnel:/vast-tunnel:ro
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel:/vast-tunnel:ro
 
   # ============================================================
   # 5) WATCHTOWER — tự update image cli-proxy-api (scope cliproxy)
@@ -201,6 +204,13 @@ services:
     environment:
       TZ: "${TZ:-Europe/Paris}"
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      # Khoá mã hoá credentials/models trong DB — TÁCH khỏi master key.
+      # Đổi LITELLM_MASTER_KEY sau khi DB đã có data = toàn bộ ciphertext
+      # (api_key, litellm_params) không giải mã được → router drop hết
+      # deployment ("Did your master_key/salt key change recently?").
+      # Salt key PIN CỐ ĐỊNH một lần (Portainer env), KHÔNG BAO GIỜ đổi.
+      # Default = master key: giữ tương thích data đã mã hoá trước đó.
+      LITELLM_SALT_KEY: "${LITELLM_SALT_KEY:-${LITELLM_MASTER_KEY}}"
       DATABASE_URL: "postgresql://litellm:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm"
       STORE_MODEL_IN_DB: "True"
       # Các API key (CPA, OpenAI, ElevenLabs, Groq, Gemini, Deepgram...)
@@ -262,7 +272,7 @@ services:
       POSTGRES_USER: litellm
       POSTGRES_PASSWORD: "${LITELLM_DB_PASSWORD}"
     volumes:
-      - /home/Docker/litellm/db:/var/lib/postgresql/data
+      - ${DOCKER_DATA_ROOT:-/home/Docker}/litellm/db:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
       interval: 10s
