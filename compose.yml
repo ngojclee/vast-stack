@@ -67,6 +67,8 @@ services:
       HEALTH_CACHE_SECONDS: "${HEALTH_CACHE_SECONDS:-3}"
       REMOTE_LLM_PORT: "${REMOTE_LLM_PORT:-18000}"
       LANGUAGE_PROMPT: "${LANGUAGE_PROMPT:-}"
+      QWEN_UPSTREAM_BASE: "${QWEN_UPSTREAM_BASE:-https://api.nexusapi.co/qwen}"
+      QWEN_FLATTEN_TOOL_HISTORY: "${QWEN_FLATTEN_TOOL_HISTORY:-true}"
     volumes:
       # READ-ONLY: gateway KHÔNG được ghi vào CPA config (chống corrupt YAML)
       - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel/instances.txt:/etc/vast/instances.txt:rw

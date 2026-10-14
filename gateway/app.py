@@ -51,6 +51,18 @@ HEALTH_CACHE_SECONDS = max(
 REMOTE_LLM_PORT = int(os.getenv("REMOTE_LLM_PORT", "18000"))
 LANGUAGE_PROMPT = os.getenv("LANGUAGE_PROMPT", "").strip()
 
+# Transparent relay for NexusAPI's Qwen endpoint. Upstream hangs on
+# tool round-trips in history, so requests are optionally flattened
+# (tool messages rendered as text) before forwarding.
+QWEN_UPSTREAM_BASE = (
+    os.getenv("QWEN_UPSTREAM_BASE", "https://api.nexusapi.co/qwen")
+    .strip()
+    .rstrip("/")
+)
+QWEN_FLATTEN_TOOL_HISTORY = (
+    os.getenv("QWEN_FLATTEN_TOOL_HISTORY", "true").lower() == "true"
+)
+
 VAST_LIST_URL = "https://console.vast.ai/api/v1/instances/"
 VAST_MANAGE_URL = "https://console.vast.ai/api/v0/instances/{id}/"
 VAST_HEADERS = (
@@ -728,6 +740,88 @@ def inject_language_prompt(body):
     ).encode("utf-8")
 
 
+def flatten_tool_history(body):
+    """Rewrite chat `messages` so NexusAPI never sees tool round-trips.
+
+    NexusAPI's Qwen endpoint hangs when the history contains a complete
+    tool-call pair (assistant.tool_calls followed by role=tool output).
+    Render those turns as plain text so the context survives.
+    """
+    if not QWEN_FLATTEN_TOOL_HISTORY:
+        return body
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception:
+        return body
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return body
+
+    changed = False
+    out = []
+    call_names = {}
+    for msg in messages:
+        if not isinstance(msg, dict):
+            out.append(msg)
+            continue
+
+        role = msg.get("role")
+        if role == "tool":
+            content = msg.get("content")
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            name = (
+                msg.get("name")
+                or call_names.get(msg.get("tool_call_id"))
+                or "tool"
+            )
+            out.append({
+                "role": "user",
+                "content": f"[Tool {name} returned: {content}]",
+            })
+            changed = True
+            continue
+
+        if role == "assistant" and msg.get("tool_calls"):
+            parts = []
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                parts.append(content)
+            for tc in msg["tool_calls"]:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") or {}
+                name = fn.get("name") or "tool"
+                if tc.get("id"):
+                    call_names[tc["id"]] = name
+                args = fn.get("arguments")
+                if not isinstance(args, str):
+                    args = json.dumps(args, ensure_ascii=False)
+                parts.append(
+                    f"[Called tool {name} with arguments: {args}]"
+                )
+            out.append({
+                "role": "assistant",
+                "content": "\n".join(parts) or "[tool call]",
+            })
+            changed = True
+            continue
+
+        out.append(msg)
+
+    if not changed:
+        return body
+
+    payload["messages"] = out
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def filtered_request_headers(req):
     hop_by_hop = {
         "host",
@@ -840,6 +934,98 @@ async def gateway_status():
             for n in nodes
         ],
     }
+
+
+@app.api_route(
+    "/qwen/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE",
+             "OPTIONS", "HEAD"],
+)
+async def qwen_proxy(req: Request, path: str):
+    """Pass-through relay to NexusAPI's Qwen endpoint.
+
+    Forwards Authorization as-is (CPA injects the upstream key) and
+    flattens tool-call history so the upstream does not hang.
+    """
+    target_url = f"{QWEN_UPSTREAM_BASE}/{path}"
+    if req.url.query:
+        target_url += f"?{req.url.query}"
+
+    body = await req.body()
+    headers = filtered_request_headers(req)
+
+    if req.method == "POST":
+        body = flatten_tool_history(body)
+
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+        is_stream = bool(
+            isinstance(payload, dict) and payload.get("stream")
+        )
+    except Exception:
+        is_stream = False
+
+    try:
+        if is_stream:
+            upstream_req = app.state.proxy_http.build_request(
+                method=req.method,
+                url=target_url,
+                headers=headers,
+                content=body,
+            )
+            upstream_resp = await app.state.proxy_http.send(
+                upstream_req,
+                stream=True,
+            )
+
+            if upstream_resp.status_code >= 400:
+                error_body = await upstream_resp.aread()
+                response_headers = filtered_response_headers(
+                    upstream_resp.headers
+                )
+                status = upstream_resp.status_code
+                await upstream_resp.aclose()
+                return Response(
+                    content=error_body,
+                    status_code=status,
+                    headers=response_headers,
+                )
+
+            async def raw_stream():
+                try:
+                    async for chunk in upstream_resp.aiter_raw():
+                        yield chunk
+                finally:
+                    await upstream_resp.aclose()
+
+            return StreamingResponse(
+                raw_stream(),
+                status_code=upstream_resp.status_code,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        upstream = await app.state.proxy_http.request(
+            method=req.method,
+            url=target_url,
+            headers=headers,
+            content=body,
+        )
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers=filtered_response_headers(upstream.headers),
+        )
+    except Exception as e:
+        print(f"⚠️ Qwen proxy error: {e}", flush=True)
+        return JSONResponse(
+            {"error": f"Qwen upstream error: {e}"},
+            status_code=502,
+        )
 
 
 @app.api_route(
