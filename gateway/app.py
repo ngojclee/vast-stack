@@ -846,6 +846,10 @@ def filtered_request_headers(req):
 def filtered_response_headers(headers):
     hop_by_hop = {
         "content-length",
+        # Response bodies are materialized/decoded by httpx before being
+        # re-sent, so advertising the upstream encoding would make the
+        # downstream client gunzip plain bytes ("gzip: invalid header").
+        "content-encoding",
         "connection",
         "keep-alive",
         "proxy-authenticate",
@@ -993,7 +997,9 @@ async def qwen_proxy(req: Request, path: str):
 
             async def raw_stream():
                 try:
-                    async for chunk in upstream_resp.aiter_raw():
+                    # aiter_bytes() decodes content-encoding; the relay
+                    # always forwards plain bytes to the client.
+                    async for chunk in upstream_resp.aiter_bytes():
                         yield chunk
                 finally:
                     await upstream_resp.aclose()
