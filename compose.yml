@@ -69,6 +69,8 @@ services:
       LANGUAGE_PROMPT: "${LANGUAGE_PROMPT:-}"
       QWEN_UPSTREAM_BASE: "${QWEN_UPSTREAM_BASE:-https://api.nexusapi.co/qwen}"
       QWEN_FLATTEN_TOOL_HISTORY: "${QWEN_FLATTEN_TOOL_HISTORY:-true}"
+      QWEN_RETRY_COUNT: "${QWEN_RETRY_COUNT:-3}"
+      QWEN_RETRY_DELAY: "${QWEN_RETRY_DELAY:-1.5}"
     volumes:
       # READ-ONLY: gateway KHÔNG được ghi vào CPA config (chống corrupt YAML)
       - ${DOCKER_DATA_ROOT:-/home/Docker}/vast-tunnel/instances.txt:/etc/vast/instances.txt:rw

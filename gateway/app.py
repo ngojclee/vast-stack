@@ -62,6 +62,13 @@ QWEN_UPSTREAM_BASE = (
 QWEN_FLATTEN_TOOL_HISTORY = (
     os.getenv("QWEN_FLATTEN_TOOL_HISTORY", "true").lower() == "true"
 )
+# Upstream flaps intermittently (Cloudflare 5xx bursts). Retry a few
+# times inside the relay so clients see a slow success instead of an
+# instant error.
+QWEN_RETRY_COUNT = max(0, int(os.getenv("QWEN_RETRY_COUNT", "3")))
+QWEN_RETRY_DELAY = max(
+    0.0, float(os.getenv("QWEN_RETRY_DELAY", "1.5"))
+)
 
 VAST_LIST_URL = "https://console.vast.ai/api/v1/instances/"
 VAST_MANAGE_URL = "https://console.vast.ai/api/v0/instances/{id}/"
@@ -969,69 +976,91 @@ async def qwen_proxy(req: Request, path: str):
     except Exception:
         is_stream = False
 
-    try:
-        if is_stream:
-            upstream_req = app.state.proxy_http.build_request(
+    last_error = None
+    for attempt in range(QWEN_RETRY_COUNT + 1):
+        if attempt:
+            await asyncio.sleep(QWEN_RETRY_DELAY)
+            print(
+                f"🔁 Qwen retry {attempt}/{QWEN_RETRY_COUNT} "
+                f"({last_error})",
+                flush=True,
+            )
+        try:
+            if is_stream:
+                upstream_req = app.state.proxy_http.build_request(
+                    method=req.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body,
+                )
+                upstream_resp = await app.state.proxy_http.send(
+                    upstream_req,
+                    stream=True,
+                )
+
+                if upstream_resp.status_code >= 400:
+                    error_body = await upstream_resp.aread()
+                    status = upstream_resp.status_code
+                    await upstream_resp.aclose()
+                    if (
+                        status >= 500
+                        and attempt < QWEN_RETRY_COUNT
+                    ):
+                        last_error = f"upstream {status}"
+                        continue
+                    return Response(
+                        content=error_body,
+                        status_code=status,
+                        headers=filtered_response_headers(
+                            upstream_resp.headers
+                        ),
+                    )
+
+                async def raw_stream(resp=upstream_resp):
+                    try:
+                        # aiter_bytes() decodes content-encoding; the
+                        # relay always forwards plain bytes.
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
+                    finally:
+                        await resp.aclose()
+
+                return StreamingResponse(
+                    raw_stream(),
+                    status_code=upstream_resp.status_code,
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
+            upstream = await app.state.proxy_http.request(
                 method=req.method,
                 url=target_url,
                 headers=headers,
                 content=body,
             )
-            upstream_resp = await app.state.proxy_http.send(
-                upstream_req,
-                stream=True,
+            if (
+                upstream.status_code >= 500
+                and attempt < QWEN_RETRY_COUNT
+            ):
+                last_error = f"upstream {upstream.status_code}"
+                continue
+            return Response(
+                content=upstream.content,
+                status_code=upstream.status_code,
+                headers=filtered_response_headers(upstream.headers),
             )
-
-            if upstream_resp.status_code >= 400:
-                error_body = await upstream_resp.aread()
-                response_headers = filtered_response_headers(
-                    upstream_resp.headers
+        except Exception as e:
+            last_error = str(e)
+            if attempt >= QWEN_RETRY_COUNT:
+                print(f"⚠️ Qwen proxy error: {e}", flush=True)
+                return JSONResponse(
+                    {"error": f"Qwen upstream error: {e}"},
+                    status_code=502,
                 )
-                status = upstream_resp.status_code
-                await upstream_resp.aclose()
-                return Response(
-                    content=error_body,
-                    status_code=status,
-                    headers=response_headers,
-                )
-
-            async def raw_stream():
-                try:
-                    # aiter_bytes() decodes content-encoding; the relay
-                    # always forwards plain bytes to the client.
-                    async for chunk in upstream_resp.aiter_bytes():
-                        yield chunk
-                finally:
-                    await upstream_resp.aclose()
-
-            return StreamingResponse(
-                raw_stream(),
-                status_code=upstream_resp.status_code,
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
-            )
-
-        upstream = await app.state.proxy_http.request(
-            method=req.method,
-            url=target_url,
-            headers=headers,
-            content=body,
-        )
-        return Response(
-            content=upstream.content,
-            status_code=upstream.status_code,
-            headers=filtered_response_headers(upstream.headers),
-        )
-    except Exception as e:
-        print(f"⚠️ Qwen proxy error: {e}", flush=True)
-        return JSONResponse(
-            {"error": f"Qwen upstream error: {e}"},
-            status_code=502,
-        )
 
 
 @app.api_route(
